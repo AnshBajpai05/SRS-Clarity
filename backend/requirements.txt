@@ -1,0 +1,6 @@
+pymupdf
+marker-pdf
+sympy
+pydantic
+torch
+python-dotenv
