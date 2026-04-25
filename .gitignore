@@ -33,8 +33,6 @@ __pycache__/
 *.egg
 
 # SRS Clarity Specific Data
-backend/data/raw_SRS_processed/
-backend/data/checkpoints/
 backend/.cache/
 backend/models/
 
