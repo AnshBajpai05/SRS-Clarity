@@ -37,29 +37,36 @@ Manual review of SRS documents is slow, inconsistent, and prone to missing criti
 
 ---
 
-## 3. Core Capabilities
+## 3. The Intelligence Pipeline
 
-### 🔹 Extraction (Stages 1–4)
-*   **Native Layout Parsing:** Uses VLMs to identify headings, lists, tables, and appendices with spatial awareness.
-*   **Equation Routing:** Isolates mathematical expressions for symbolic indexing.
-*   **Markdown Hardening:** Normalizes noisy OCR output into a "Clean Markdown" format.
+SRS Clarity operates as a multi-stage refinement engine, moving from high-entropy PDF pixels to low-entropy logical assertions.
 
-### 🔹 Structuring (Stage 5)
-*   **Format-Agnostic Intelligence:** Extracts atomic requirements (FR, NFR, User Stories) from bullet blocks and paragraphs.
-*   **Grammatical Validation:** Filters out non-normative noise (metadata, glossary items) by enforcing requirement syntax guards.
-*   **Pydantic Normalization:** Wraps text into a machine-readable schema including `actor`, `goal`, `condition`, and `logic`.
+### 🏗️ Phase 1: Deep Vision Extraction (Stages 1–4)
+*The goal is to convert raw document pixels into "Clean Markdown" while preserving spatial context.*
+*   **VLM Layout Engine:** Instead of brittle OCR, we use **Vision Language Models (VLM)** to recognize document hierarchy (headings, tables, appendices) with full spatial awareness.
+*   **Symbolic Routing:** Isolates mathematical equations and technical notations, ensuring they aren't mangled by standard text processors.
+*   **Markdown Hardening:** Normalizes noisy extraction artifacts into a high-fidelity markdown structure that serves as the "Source of Truth" for all downstream reasoning.
 
-### 🔹 Reasoning (Stage 6)
-*   **Ambiguity Detection:** Flags 15+ categories of linguistic risk (vague adjectives, latency gaps).
-*   **Conflict Detection:** Identifies contradictions through multi-layer semantic and logical collision logic.
-*   **Limited Gap Identification:** Focused specifically on testability gaps and missing business rationales in user stories.
+### 🧩 Phase 2: Semantic Structuring (Stage 5)
+*The goal is to extract atomic requirements from the cleaned markdown and normalize them into a machine-readable schema.*
+*   **Requirement Synthesis:** Identifies Functional Requirements (FR), Non-Functional Requirements (NFR), and User Stories hidden within bullet lists or paragraphs.
+*   **Syntactic Guardrails:** Implements grammatical validation to filter out metadata, glossary terms, and non-normative text (e.g., text without "shall," "must," or "system will").
+*   **Pydantic Schema Mapping:** Each requirement is mapped to a strict schema containing `actor`, `goal`, `condition`, and `action` nodes, enabling programmatic logical comparison.
 
-### 🔹 Observability (New)
-*   **Asynchronous Background Processing:** Heavy VLM extractions and logical audits run in background worker threads, keeping the UI interactive.
-*   **Live Document Skeleton:** A real-time UI overlay visualizes the system's "reading path," showing headings and requirements as they are parsed from the PDF.
-*   **Granular Telemetry:** Provides page-by-page progress reporting from the VLM and stage-by-stage updates from the reasoning engine.
+### 🧠 Phase 3: The Reasoning Engine (Stage 6)
+*The goal is to perform a deep logical audit of the extracted requirements to find contradictions and quality risks.*
+*   **Linguistic Quality Audit:** Flags 15+ categories of ambiguity (e.g., "fast response," "scalable," "user-friendly") by comparing extracted terms against a known risk-vocabulary.
+*   **Hybrid Conflict Detection:** A multi-layered approach that combines **Direct Keyword Collision** (e.g., `enable` vs `disable`) with **Semantic Intent Analysis** (Polarity Decoupling).
+*   **Logical Range Evaluation:** Detects "Hierarchical Overlaps" where numeric conditions intersect (e.g., `Latency < 100ms` vs `Latency < 50ms`) leading to conflicting system behaviors.
+
+### 📺 Phase 4: Real-Time Observability
+*The goal is to provide total transparency into the AI's internal state during long-running tasks.*
+*   **Async Pipeline Execution:** Heavy CPU/VLM tasks run in background worker threads (FastAPI BackgroundTasks), keeping the UI responsive.
+*   **Live Document Skeleton:** A real-time UI overlay visualizes the system's "reading path," revealing the document structure page-by-page as the VLM processes it.
+*   **State-Streamed Feedback:** Uses granular telemetry to report exactly which page, stage, or requirement the engine is currently analyzing.
 
 ---
+
 
 ## 4. Reasoning Engine (Deep Dive)
 
