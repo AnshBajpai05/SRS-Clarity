@@ -1,193 +1,517 @@
 import { create } from 'zustand';
 
-export type AnalysisMode = 'FULL' | 'PARTIAL' | 'UNPROCESSED' | 'NONE';
-export type SourceType = 'pdf' | 'markdown' | null;
+const API_BASE = 'http://localhost:8000';
 
-export interface SRSSection {
-  title: string;
-  content: string;
-  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+// ────────────────────────────────────────────────────────────────────
+// TYPES (from real backend schemas)
+// ────────────────────────────────────────────────────────────────────
+
+export interface DocumentSummary {
+  doc_id: string;
+  stories: number;
+  actors: string[];
+  issues: number;
+  original_issues?: number;
+  has_intelligence: boolean;
+  has_issues: boolean;
+}
+
+export interface LogicBlock {
+  type: string;
+  trigger: Record<string, any> | null;
+  condition: string | null;
+  action: Record<string, any> | null;
+  result: string | null;
+  confidence: number;
+}
+
+export interface ACNode {
+  text: string;
+  type: string;
+  level: number;
+  children: ACNode[];
+  logic: LogicBlock[];
+}
+
+export interface UserStory {
+  id: string;
+  role: string;
+  goal: string;
+  reason: string | null;
+  confidence: number;
+  acceptance_criteria: ACNode[];
+  raw_text: string;
+}
+
+export interface IntelligenceModel {
+  document_name: string;
+  actors: string[];
+  user_stories: UserStory[];
+  metadata: Record<string, any>;
 }
 
 export interface AmbiguityIssue {
   id: string;
+  story_id: string;
   text: string;
-  severity: 'low' | 'medium' | 'high';
+  term: string;
+  category: string;
+  severity: 'high' | 'medium' | 'low';
   explanation: string;
-  suggestedRewrite: string;
-  category: 'vague' | 'missing-actor' | 'undefined-term';
+  suggested_rewrite: string;
 }
 
-export interface Defect {
+export interface ConflictIssue {
   id: string;
-  title: string;
-  severity: 'low' | 'medium' | 'high' | 'critical';
-  type: 'conflict' | 'version-mismatch' | 'dependency' | 'logic';
+  stories: string[];
+  severity: 'high' | 'medium';
+  category: string;
   description: string;
-  rootCause: string;
-  requirements: string[];
+  details: string[];
+  confidence: number;
+  source: 'rule' | 'embedding' | 'llm';
+  explanation: string;
+  rule_a: any;
+  rule_b: any;
+  trace?: any[];
+  similarity?: number;
+  confidence_breakdown?: {
+    rule: number;
+    embedding: number;
+    llm: number;
+  };
 }
 
-export interface Enhancement {
+export interface GapIssue {
   id: string;
-  original: string;
-  improved: string;
-  impactScore: number;
-  changes: string[];
+  story_id: string;
+  severity: 'medium' | 'low';
+  category: string;
+  description: string;
+  recommendation: string;
 }
 
-export interface TraceItem {
-  requirement: string;
-  feature: string;
-  module: string;
-  testCase: string;
+export interface IssuesReport {
+  document_name: string;
+  total_ambiguities: number;
+  total_conflicts: number;
+  total_gaps: number;
+  ambiguities: AmbiguityIssue[];
+  conflicts: ConflictIssue[];
+  gaps: GapIssue[];
+  metadata: Record<string, any>;
 }
 
-export interface TestCase {
-  id: string;
-  title: string;
-  requirement: string;
-  type: 'functional' | 'edge' | 'negative';
-  input: string;
-  expectedOutput: string;
-  priority: 'low' | 'medium' | 'high';
-}
-
-export interface ClarityMetrics {
-  clarityScore: number;
-  ambiguityPercent: number;
-  completenessPercent: number;
-  consistencyPercent: number;
-  defectDensity: number;
-}
+// ────────────────────────────────────────────────────────────────────
+// STORE
+// ────────────────────────────────────────────────────────────────────
 
 interface DocumentState {
-  fileName: string | null;
-  sourceType: SourceType;
-  analysisMode: AnalysisMode;
-  rawContent: string | null;
-  sections: SRSSection[];
-  ambiguities: AmbiguityIssue[];
-  defects: Defect[];
-  enhancements: Enhancement[];
-  traceability: TraceItem[];
-  testCases: TestCase[];
-  metrics: ClarityMetrics | null;
-  structureConfidence: 'HIGH' | 'MEDIUM' | 'LOW' | null;
-  missingSections: string[];
-  loadDocument: (fileName: string, content: string, sourceType: SourceType) => void;
-  clearDocument: () => void;
-  reparse: () => void;
+  // Connection
+  isLoading: boolean;
+  error: string | null;
+  uploadProgress: string | null;
+  uploadProgressPercent: number;
+  uploadActiveStage: string | null;
+
+  // Data
+  documents: DocumentSummary[];
+  currentDocId: string | null;
+  intelligence: IntelligenceModel | null;
+  issues: IssuesReport | null;
+
+  // Workspace Triage State
+  issueStatus: Record<string, "open" | "resolved" | "ignored">;
+  selectedIssueId: string | null;
+  selectedModule: string | null;
+  
+  // Patching & Memory State
+  patchedRequirements: Record<string, string>;
+  issueToRequirementMap: Record<string, string>;
+  patchHistory: Array<{ reqId: string, oldText: string, newText: string }>;
+  hasUnsavedChanges: boolean;
+
+  // Actions
+  fetchDocuments: () => Promise<void>;
+  selectDocument: (docId: string) => Promise<void>;
+  uploadPdf: (file: File) => Promise<{ status: 'duplicate' | 'success', docId: string }>;
+  deleteDocument: (docId: string) => Promise<void>;
+  clearError: () => void;
+  
+  // Triage Actions
+  resolveIssue: (id: string) => void;
+  ignoreIssue: (id: string) => void;
+  applyFix: (reqId: string, newText: string) => void;
+  resolveModule: (moduleId: string) => void;
+  setSelectedIssue: (id: string | null) => void;
+  setSelectedModule: (moduleId: string | null) => void;
+  clearUnsavedChanges: () => void;
+
+  // Getters
+  getIssueStatus: (id: string) => "open" | "resolved" | "ignored";
+  getGroupedIssuesByModule: () => Record<string, any[]>;
 }
 
-const MOCK_SECTIONS: SRSSection[] = [
-  { title: 'Functional Requirements', content: '## FR-001: User Authentication\nThe system shall provide secure authentication using OAuth 2.0.\n\n## FR-002: Data Export\nThe system should allow users to export data in multiple formats.\n\n## FR-003: Dashboard\nThe system shall display real-time analytics on the main dashboard.', confidence: 'HIGH' },
-  { title: 'Non-functional Requirements', content: '## NFR-001: Performance\nThe system should be fast and responsive.\n\n## NFR-002: Scalability\nThe system must handle a large number of users.\n\n## NFR-003: Security\nAll data must be encrypted at rest and in transit.', confidence: 'MEDIUM' },
-  { title: 'Constraints', content: '## C-001: Technology Stack\nThe system must use React and Node.js.\n\n## C-002: Browser Support\nSupport for Chrome, Firefox, Safari, Edge.', confidence: 'HIGH' },
-  { title: 'Assumptions', content: '## A-001: Internet Connectivity\nUsers will have stable internet.\n\n## A-002: Modern Browsers\nUsers will use browsers released within the last 2 years.', confidence: 'HIGH' },
-];
+export const useDocumentStore = create<DocumentState>((set, get) => ({
+  isLoading: false,
+  error: null,
+  uploadProgress: null,
+  uploadProgressPercent: 0,
+  uploadActiveStage: null,
+  documents: [],
+  currentDocId: null,
+  intelligence: null,
+  issues: null,
 
-const MOCK_AMBIGUITIES: AmbiguityIssue[] = [
-  { id: 'AMB-001', text: 'The system should be fast and responsive', severity: 'high', explanation: '"Fast" and "responsive" are subjective terms without measurable criteria.', suggestedRewrite: 'The system shall respond to user requests within 200ms for 95th percentile of requests.', category: 'vague' },
-  { id: 'AMB-002', text: 'The system must handle a large number of users', severity: 'high', explanation: '"Large number" is undefined. No specific capacity mentioned.', suggestedRewrite: 'The system shall support 10,000 concurrent users with less than 5% degradation in response time.', category: 'vague' },
-  { id: 'AMB-003', text: 'Users will have stable internet', severity: 'medium', explanation: '"Stable internet" is not defined. No fallback for offline scenarios.', suggestedRewrite: 'The system assumes a minimum bandwidth of 1 Mbps. Offline mode shall queue operations for sync.', category: 'undefined-term' },
-  { id: 'AMB-004', text: 'The system should allow users to export data', severity: 'low', explanation: 'No actor specified — which user role can export?', suggestedRewrite: 'Authenticated users with "Analyst" role shall be able to export data in CSV, JSON, and PDF formats.', category: 'missing-actor' },
-];
+  issueStatus: {},
+  selectedIssueId: null,
+  selectedModule: null,
+  patchedRequirements: {},
+  issueToRequirementMap: {},
+  patchHistory: [],
+  hasUnsavedChanges: false,
 
-const MOCK_DEFECTS: Defect[] = [
-  { id: 'DEF-001', title: 'Authentication Conflict', severity: 'critical', type: 'conflict', description: 'FR-001 specifies OAuth 2.0, but NFR-003 implies custom encryption that may conflict with OAuth token handling.', rootCause: 'Ambiguous security scope between authentication and encryption requirements.', requirements: ['FR-001', 'NFR-003'] },
-  { id: 'DEF-002', title: 'Performance vs Scalability Gap', severity: 'high', type: 'logic', description: 'NFR-001 demands "fast" response without defining metrics, while NFR-002 requires handling "large" user loads. These are potentially conflicting without resource allocation.', rootCause: 'Missing quantitative thresholds for both performance and scalability.', requirements: ['NFR-001', 'NFR-002'] },
-  { id: 'DEF-003', title: 'Missing Dependency Chain', severity: 'medium', type: 'dependency', description: 'FR-003 (Dashboard) depends on data from FR-002 (Export), but no data pipeline is defined.', rootCause: 'No integration requirement between dashboard and data export modules.', requirements: ['FR-002', 'FR-003'] },
-];
+  clearError: () => set({ error: null }),
 
-const MOCK_ENHANCEMENTS: Enhancement[] = [
-  { id: 'ENH-001', original: 'The system should be fast and responsive.', improved: 'The system shall respond to all API requests within 200ms at the 95th percentile under normal load (up to 5,000 concurrent users).', impactScore: 92, changes: ['Added measurable response time', 'Defined load conditions', 'Specified percentile'] },
-  { id: 'ENH-002', original: 'The system must handle a large number of users.', improved: 'The system shall support 10,000 concurrent users with horizontal auto-scaling, maintaining response times under 500ms at the 99th percentile.', impactScore: 88, changes: ['Defined user capacity', 'Added scaling strategy', 'Set performance threshold'] },
-  { id: 'ENH-003', original: 'The system should allow users to export data in multiple formats.', improved: 'Authenticated users with "Analyst" or "Admin" roles shall export datasets up to 100MB in CSV, JSON, and PDF formats, with progress indication for exports exceeding 10MB.', impactScore: 76, changes: ['Specified user roles', 'Added size limits', 'Included UX consideration'] },
-];
-
-const MOCK_TRACEABILITY: TraceItem[] = [
-  { requirement: 'FR-001', feature: 'User Login', module: 'Auth Module', testCase: 'TC-001' },
-  { requirement: 'FR-002', feature: 'Data Export', module: 'Export Module', testCase: 'TC-002' },
-  { requirement: 'FR-003', feature: 'Analytics Dashboard', module: 'Dashboard Module', testCase: 'TC-003' },
-  { requirement: 'NFR-001', feature: 'API Response Time', module: 'API Gateway', testCase: 'TC-004' },
-  { requirement: 'NFR-002', feature: 'Auto-scaling', module: 'Infrastructure', testCase: 'TC-005' },
-  { requirement: 'NFR-003', feature: 'Encryption', module: 'Security Module', testCase: 'TC-006' },
-];
-
-const MOCK_TESTS: TestCase[] = [
-  { id: 'TC-001', title: 'Valid OAuth Login', requirement: 'FR-001', type: 'functional', input: 'Valid Google OAuth credentials', expectedOutput: 'User authenticated, JWT token issued, redirect to dashboard', priority: 'high' },
-  { id: 'TC-002', title: 'CSV Export - Large Dataset', requirement: 'FR-002', type: 'edge', input: 'Dataset with 1M rows, CSV format selected', expectedOutput: 'File generated within 30s, download initiated, progress bar shown', priority: 'high' },
-  { id: 'TC-003', title: 'Dashboard Load Under Stress', requirement: 'FR-003', type: 'functional', input: '5,000 concurrent users accessing dashboard', expectedOutput: 'Dashboard renders within 2s, all widgets load, no errors', priority: 'medium' },
-  { id: 'TC-004', title: 'Invalid Token Access', requirement: 'FR-001', type: 'negative', input: 'Expired JWT token in Authorization header', expectedOutput: '401 Unauthorized response, redirect to login', priority: 'high' },
-  { id: 'TC-005', title: 'Export with No Data', requirement: 'FR-002', type: 'edge', input: 'Empty dataset, PDF format selected', expectedOutput: 'Friendly message: "No data to export", no file generated', priority: 'low' },
-  { id: 'TC-006', title: 'SQL Injection in Search', requirement: 'NFR-003', type: 'negative', input: "Search query: ' OR 1=1 --", expectedOutput: 'Input sanitized, no data leak, request logged', priority: 'high' },
-];
-
-const MOCK_METRICS: ClarityMetrics = {
-  clarityScore: 68,
-  ambiguityPercent: 32,
-  completenessPercent: 75,
-  consistencyPercent: 71,
-  defectDensity: 0.25,
-};
-
-export const useDocumentStore = create<DocumentState>((set) => ({
-  fileName: null,
-  sourceType: null,
-  analysisMode: 'NONE',
-  rawContent: null,
-  sections: [],
-  ambiguities: [],
-  defects: [],
-  enhancements: [],
-  traceability: [],
-  testCases: [],
-  metrics: null,
-  structureConfidence: null,
-  missingSections: [],
-
-  loadDocument: (fileName, content, sourceType) => {
-    const hasFunctional = content.toLowerCase().includes('functional');
-    const hasNonfunctional = content.toLowerCase().includes('non-functional');
-    const hasConstraints = content.toLowerCase().includes('constraint');
-    const hasAssumptions = content.toLowerCase().includes('assumption');
-
-    const missing: string[] = [];
-    if (!hasFunctional) missing.push('Functional Requirements');
-    if (!hasNonfunctional) missing.push('Non-functional Requirements');
-    if (!hasConstraints) missing.push('Constraints');
-    if (!hasAssumptions) missing.push('Assumptions');
-
-    const mode: AnalysisMode = missing.length === 0 ? 'FULL' : missing.length < 3 ? 'PARTIAL' : 'UNPROCESSED';
-
-    set({
-      fileName,
-      sourceType,
-      analysisMode: mode,
-      rawContent: content,
-      sections: MOCK_SECTIONS,
-      ambiguities: MOCK_AMBIGUITIES,
-      defects: MOCK_DEFECTS,
-      enhancements: MOCK_ENHANCEMENTS,
-      traceability: MOCK_TRACEABILITY,
-      testCases: MOCK_TESTS,
-      metrics: MOCK_METRICS,
-      structureConfidence: mode === 'FULL' ? 'HIGH' : mode === 'PARTIAL' ? 'MEDIUM' : 'LOW',
-      missingSections: missing,
-    });
+  deleteDocument: async (docId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/document/${encodeURIComponent(docId)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`Failed to delete document: ${res.statusText}`);
+      // Remove from local list immediately, and clear state if it was selected
+      set(state => ({
+        documents: state.documents.filter(d => d.doc_id !== docId),
+        currentDocId: state.currentDocId === docId ? null : state.currentDocId,
+        intelligence: state.currentDocId === docId ? null : state.intelligence,
+        issues: state.currentDocId === docId ? null : state.issues,
+      }));
+      localStorage.removeItem(`srs_clarity_state_${docId}`);
+    } catch (e: any) {
+      set({ error: e.message });
+    }
   },
 
-  clearDocument: () => set({
-    fileName: null, sourceType: null, analysisMode: 'NONE', rawContent: null,
-    sections: [], ambiguities: [], defects: [], enhancements: [],
-    traceability: [], testCases: [], metrics: null, structureConfidence: null, missingSections: [],
+
+  fetchDocuments: async () => {
+    set({ isLoading: true, error: null });
+    try {
+      const res = await fetch(`${API_BASE}/api/documents`);
+      if (!res.ok) throw new Error(`Failed to fetch documents: ${res.statusText}`);
+      const data = await res.json();
+      
+      // Update issues count with local resolution state
+      const updatedDocuments = data.documents.map((doc: any) => {
+        const savedStateStr = localStorage.getItem(`srs_clarity_state_${doc.doc_id}`);
+        let resolvedCount = 0;
+        if (savedStateStr) {
+           try {
+              const savedState = JSON.parse(savedStateStr);
+              if (savedState.issueStatus) {
+                 resolvedCount = Object.values(savedState.issueStatus).filter(s => s === 'resolved' || s === 'ignored').length;
+              }
+           } catch(e) {}
+        }
+        return {
+          ...doc,
+          issues: Math.max(0, doc.issues - resolvedCount),
+          original_issues: doc.issues
+        };
+      });
+
+      set({ documents: updatedDocuments, isLoading: false });
+    } catch (e: any) {
+      set({ error: e.message, isLoading: false });
+    }
+  },
+
+  selectDocument: async (docId: string) => {
+    set({ isLoading: true, error: null, currentDocId: docId });
+    try {
+      const [intelRes, issuesRes] = await Promise.all([
+        fetch(`${API_BASE}/api/document/${encodeURIComponent(docId)}/intelligence`),
+        fetch(`${API_BASE}/api/document/${encodeURIComponent(docId)}/issues`),
+      ]);
+
+      const intelligence = intelRes.ok ? await intelRes.json() : null;
+      const issues = issuesRes.ok ? await issuesRes.json() : null;
+
+      // Build issueToRequirementMap and reset triage state
+      const map: Record<string, string> = {};
+      const status: Record<string, "open"> = {};
+      
+      if (issues) {
+        issues.ambiguities?.forEach((a: any) => {
+           map[a.id] = a.story_id;
+           status[a.id] = "open";
+        });
+        issues.gaps?.forEach((g: any) => {
+           map[g.id] = g.story_id;
+           status[g.id] = "open";
+        });
+        issues.conflicts?.forEach((c: any) => {
+           // A conflict links to multiple stories, we map it to the first one for simplicity 
+           // but applyFix will need to handle multiple if necessary, or just rely on the map
+           if (c.stories && c.stories.length > 0) {
+              map[c.id] = c.stories[0];
+           }
+           status[c.id] = "open";
+        });
+      }
+
+      // Check for saved local state
+      const savedStateStr = localStorage.getItem(`srs_clarity_state_${docId}`);
+      let finalPatchedRequirements: Record<string, string> = {};
+      let finalPatchHistory: any[] = [];
+      
+      if (savedStateStr) {
+         try {
+            const savedState = JSON.parse(savedStateStr);
+            if (savedState.patchedRequirements) finalPatchedRequirements = savedState.patchedRequirements;
+            if (savedState.patchHistory) finalPatchHistory = savedState.patchHistory;
+            if (savedState.issueStatus) {
+               // Merge saved statuses, overriding the default "open" state
+               Object.assign(status, savedState.issueStatus);
+            }
+         } catch(e) {
+            console.error("Failed to parse saved state", e);
+         }
+      }
+
+      set({ 
+        intelligence, 
+        issues, 
+        isLoading: false,
+        issueStatus: status,
+        selectedIssueId: null,
+        selectedModule: null,
+        patchedRequirements: finalPatchedRequirements,
+        issueToRequirementMap: map,
+        patchHistory: finalPatchHistory,
+        hasUnsavedChanges: Object.keys(finalPatchedRequirements).length > 0
+      });
+    } catch (e: any) {
+      set({ error: e.message, isLoading: false });
+    }
+  },
+
+  uploadPdf: async (file) => {
+    const docId = file.name.replace(/\.[^/.]+$/, ""); // basic stem
+    const isDuplicate = get().documents.some(d => d.doc_id === docId);
+    
+    if (isDuplicate) {
+      return { status: 'duplicate', docId };
+    }
+
+    set({ isLoading: true, error: null, uploadProgress: 'Uploading document...', uploadProgressPercent: 0, uploadActiveStage: 'Parsing Document' });
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const response = await fetch(`${API_BASE}/api/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+      
+      if (!response.ok) throw new Error('Upload failed');
+      const data = await response.json();
+      const uploadedDocId: string = data.doc_id;
+
+      // --- Real-time polling ---
+      await new Promise<void>((resolve, reject) => {
+        const startTime = Date.now();
+        const TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+        let lastPercent = 0;
+        let staleSince = Date.now();
+
+        const pollInterval = setInterval(async () => {
+          try {
+            // Timeout guard
+            if (Date.now() - startTime > TIMEOUT_MS) {
+              clearInterval(pollInterval);
+              reject(new Error('Processing timed out after 10 minutes.'));
+              return;
+            }
+
+            const statusRes = await fetch(`${API_BASE}/api/document/${encodeURIComponent(uploadedDocId)}/status`);
+            if (!statusRes.ok) return;
+            const statusData = await statusRes.json();
+
+            const { status, stage, message, percent } = statusData;
+
+            // Stall detection: if percent hasn't changed in 5s, show stall message
+            if (percent !== undefined && percent !== lastPercent) {
+              lastPercent = percent;
+              staleSince = Date.now();
+            }
+            const isStalled = Date.now() - staleSince > 5000;
+            const displayMessage = isStalled
+              ? 'Still processing... this may take a few moments'
+              : (message || 'Processing...');
+
+            set({
+              uploadProgress: displayMessage,
+              uploadProgressPercent: percent ?? lastPercent,
+              uploadActiveStage: stage ?? null,
+            });
+
+            if (status === 'done') {
+              set({ uploadProgress: 'Finalizing results...', uploadProgressPercent: 100 });
+              clearInterval(pollInterval);
+              // Small delay for smooth UX transition
+              setTimeout(resolve, 600);
+            } else if (status === 'error') {
+              // Grace period: "not found in active queue" can be transient during the first
+              // few seconds while FastAPI starts the background task. Only fail hard after 15s.
+              const isTransientNotFound = (message || '').includes('not found in active queue');
+              const elapsed = Date.now() - startTime;
+              if (isTransientNotFound && elapsed < 15000) {
+                return; // keep polling, it's just not started yet
+              }
+              clearInterval(pollInterval);
+              reject(new Error(message || 'Pipeline processing error'));
+            }
+          } catch (pollErr) {
+            // Non-fatal: network hiccup during polling, keep trying
+            console.warn('Status poll error (retrying):', pollErr);
+          }
+        }, 1500);
+      });
+
+      await get().fetchDocuments();
+      await get().selectDocument(uploadedDocId);
+
+      return { status: 'success', docId: uploadedDocId };
+    } catch (err: any) {
+      set({ error: err.message || 'Upload failed' });
+      throw err;
+    } finally {
+      set({ isLoading: false, uploadProgress: null, uploadProgressPercent: 0, uploadActiveStage: null });
+    }
+  },
+
+  // ────────────────────────────────────────────────────────────────────
+  // WORKSPACE TRIAGE ACTIONS
+  // ────────────────────────────────────────────────────────────────────
+  
+  resolveIssue: (id) => set((state) => {
+    const newStatus: Record<string, "open" | "resolved" | "ignored"> = { ...state.issueStatus, [id]: "resolved" };
+    const moduleIssues = state.getGroupedIssuesByModule()[state.selectedModule || ""] || [];
+    const nextIssue = moduleIssues.find(i => newStatus[i.id] === 'open');
+    
+    if (state.currentDocId) {
+       localStorage.setItem(`srs_clarity_state_${state.currentDocId}`, JSON.stringify({
+         patchedRequirements: state.patchedRequirements,
+         issueStatus: newStatus,
+         patchHistory: state.patchHistory
+       }));
+    }
+    
+    return { issueStatus: newStatus, selectedIssueId: nextIssue ? nextIssue.id : null };
+  }),
+  
+  ignoreIssue: (id) => set((state) => {
+    const newStatus: Record<string, "open" | "resolved" | "ignored"> = { ...state.issueStatus, [id]: "ignored" };
+    const moduleIssues = state.getGroupedIssuesByModule()[state.selectedModule || ""] || [];
+    const nextIssue = moduleIssues.find(i => newStatus[i.id] === 'open');
+    
+    if (state.currentDocId) {
+       localStorage.setItem(`srs_clarity_state_${state.currentDocId}`, JSON.stringify({
+         patchedRequirements: state.patchedRequirements,
+         issueStatus: newStatus,
+         patchHistory: state.patchHistory
+       }));
+    }
+
+    return { issueStatus: newStatus, selectedIssueId: nextIssue ? nextIssue.id : null };
+  }),
+  
+  setSelectedIssue: (id) => set({ selectedIssueId: id }),
+  
+  setSelectedModule: (moduleId) => set({ selectedModule: moduleId }),
+  
+  applyFix: (reqId, newText) => set((state) => {
+    // Find original text
+    const story = state.intelligence?.user_stories.find(s => s.id === reqId);
+    const oldText = state.patchedRequirements[reqId] || story?.raw_text || "";
+    
+    // Resolve all issues linked to this requirement
+    const newStatus: Record<string, "open" | "resolved" | "ignored"> = { ...state.issueStatus };
+    Object.entries(state.issueToRequirementMap).forEach(([issueId, mappedReqId]) => {
+       if (mappedReqId === reqId || (state.issues?.conflicts?.find(c => c.id === issueId)?.stories?.includes(reqId))) {
+           newStatus[issueId] = "resolved";
+       }
+    });
+
+    const moduleIssues = state.getGroupedIssuesByModule()[state.selectedModule || ""] || [];
+    const nextIssue = moduleIssues.find(i => newStatus[i.id] === 'open');
+
+    const newPatchedRequirements = { ...state.patchedRequirements, [reqId]: newText };
+    const newPatchHistory = [...state.patchHistory, { reqId, oldText, newText }];
+
+    if (state.currentDocId) {
+       localStorage.setItem(`srs_clarity_state_${state.currentDocId}`, JSON.stringify({
+         patchedRequirements: newPatchedRequirements,
+         issueStatus: newStatus,
+         patchHistory: newPatchHistory
+       }));
+    }
+
+    return {
+      patchedRequirements: newPatchedRequirements,
+      issueStatus: newStatus,
+      patchHistory: newPatchHistory,
+      hasUnsavedChanges: true,
+      selectedIssueId: nextIssue ? nextIssue.id : null
+    };
   }),
 
-  reparse: () => {
-    set((state) => {
-      if (!state.rawContent || !state.fileName) return state;
-      return { ...state, analysisMode: 'FULL', structureConfidence: 'HIGH', missingSections: [] };
+  resolveModule: (moduleId) => set((state) => {
+    const newStatus: Record<string, "open" | "resolved" | "ignored"> = { ...state.issueStatus };
+    const issues = state.getGroupedIssuesByModule()[moduleId] || [];
+    issues.forEach(issue => {
+      newStatus[issue.id] = "resolved";
     });
+    if (state.currentDocId) {
+       localStorage.setItem(`srs_clarity_state_${state.currentDocId}`, JSON.stringify({
+         patchedRequirements: state.patchedRequirements,
+         issueStatus: newStatus,
+         patchHistory: state.patchHistory
+       }));
+    }
+
+    return { issueStatus: newStatus };
+  }),
+
+  clearUnsavedChanges: () => set({ hasUnsavedChanges: false }),
+
+  getIssueStatus: (id) => {
+    return get().issueStatus[id] || "open";
   },
+
+  getGroupedIssuesByModule: () => {
+    const state = get();
+    const groups: Record<string, any[]> = {};
+    
+    const extractModule = (id: string) => {
+      const match = id.match(/-([A-Z]+)-/);
+      return match ? match[1] : "GENERAL";
+    };
+
+    const addIssue = (issue: any, reqId: string) => {
+      const mod = extractModule(reqId);
+      if (!groups[mod]) groups[mod] = [];
+      groups[mod].push(issue);
+    };
+
+    state.issues?.ambiguities?.forEach(a => addIssue({ ...a, _type: 'ambiguity' }, a.story_id));
+    state.issues?.gaps?.forEach(g => addIssue({ ...g, _type: 'gap' }, g.story_id));
+    state.issues?.conflicts?.forEach(c => {
+      // Use the first story's module for grouping, or GENERAL
+      const mod = c.stories && c.stories.length > 0 ? extractModule(c.stories[0]) : "GENERAL";
+      if (!groups[mod]) groups[mod] = [];
+      groups[mod].push({ ...c, _type: 'conflict' });
+    });
+
+    return groups;
+  }
 }));

@@ -10,7 +10,7 @@ from pipeline.utils import setup_logger, RawPageRecord, save_json, load_json
 
 logger = setup_logger("stage2_extract_vlm")
 
-def extract_pdf_vlm(pdf_path: Path, output_dir: Path) -> list[RawPageRecord]:
+def extract_pdf_vlm(pdf_path: Path, output_dir: Path, progress_callback=None) -> list[RawPageRecord]:
     """
     State-of-the-Art (SOTA) Vision-Language Model extraction using Marker.
     Enforces GPU, extracts page-by-page implicitly preventing merged page errors.
@@ -54,6 +54,9 @@ def extract_pdf_vlm(pdf_path: Path, output_dir: Path) -> list[RawPageRecord]:
         logger.info(f"Processing {total_pages} pages sequentially for exact page separation...")
         for i in range(total_pages):
             logger.info(f"VLM processing page {i+1}/{total_pages}")
+            if progress_callback:
+                percent = 5 + int((i / total_pages) * 20)  # Pages take up 5%→25% range
+                progress_callback("Parsing Document", f"VLM processing page {i+1}/{total_pages}", percent)
             
             # Temporary single-page PDF for Marker
             tmp_pdf_path = output_dir / f"tmp_{doc_id}_page_{i}.pdf"

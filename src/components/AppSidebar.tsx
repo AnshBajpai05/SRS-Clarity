@@ -1,6 +1,5 @@
 import {
-  LayoutDashboard, FileText, AlertTriangle, Bug, Sparkles,
-  GitBranch, TestTube, BarChart3, Download, MessageSquare,
+  LayoutDashboard, FileText, AlertTriangle, Sparkles,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -11,15 +10,8 @@ import {
 
 const items = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
-  { title: "SRS Parser", url: "/parser", icon: FileText },
-  { title: "Ambiguity Detector", url: "/ambiguity", icon: AlertTriangle },
-  { title: "Defect Analyzer", url: "/defects", icon: Bug },
-  { title: "SRS Enhancer", url: "/enhancer", icon: Sparkles },
-  { title: "Traceability Map", url: "/traceability", icon: GitBranch },
-  { title: "Test Generator", url: "/tests", icon: TestTube },
-  { title: "Clarity Breakdown", url: "/clarity", icon: BarChart3 },
-  { title: "Export Center", url: "/export", icon: Download },
-  { title: "Ask Your SRS", url: "/chat", icon: MessageSquare },
+  { title: "Document Viewer", url: "/viewer", icon: FileText },
+  { title: "Issues", url: "/issues", icon: AlertTriangle },
 ];
 
 export function AppSidebar() {

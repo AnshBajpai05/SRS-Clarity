@@ -4,3 +4,6 @@ sympy
 pydantic
 torch
 python-dotenv
+fastapi
+uvicorn[standard]
+python-multipart
