@@ -1,9 +1,24 @@
-pymupdf
-marker-pdf
-sympy
-pydantic
-torch
-python-dotenv
-fastapi
-uvicorn[standard]
-python-multipart
+# Core API & Server
+fastapi==0.110.0
+uvicorn[standard]==0.27.1
+python-multipart==0.0.9
+pydantic==2.6.3
+python-dotenv==1.0.1
+
+# PDF Processing & Vision (SOTA Extraction)
+pymupdf==1.23.26
+marker-pdf==0.3.11
+torch>=2.0.0
+# note: marker-pdf depends on surya-ocr and layout-parser
+
+# Semantic Intelligence & Reasoning
+sentence-transformers==2.5.1
+faiss-cpu==1.8.0
+scikit-learn==1.4.1.post1
+numpy>=1.24.0
+sympy==1.12
+
+# Utilities
+rich==13.7.1
+pathlib
+requests==2.31.0
